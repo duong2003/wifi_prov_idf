@@ -21,6 +21,8 @@
 
 #include <wifi_provisioning/manager.h>
 #include <wifi_provisioning/scheme_ble.h>
+#include <cJSON.h>
+
 
 static const char *TAG = "app";
 
@@ -123,23 +125,46 @@ esp_err_t get_mac_endpoint_handler(uint32_t session_id, const uint8_t *inbuf, ss
 
 /* Handler cho custom endpoint "custom-data" */
 esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf, ssize_t inlen,
-                                   uint8_t **outbuf, ssize_t *outlen, void *priv_data)
+    uint8_t **outbuf, ssize_t *outlen, void *priv_data)
 {
-    if (inbuf)
-    {
-        ESP_LOGI(TAG, "Received data: %.*s", inlen, (char *)inbuf);
-    }
-    char response[] = "SUCCESS";
-    *outbuf = (uint8_t *)strdup(response);
-    if (*outbuf == NULL)
-    {
-        ESP_LOGE(TAG, "System out of memory");
-        return ESP_ERR_NO_MEM;
-    }
-    *outlen = strlen(response) + 1; /* +1 for NULL terminating byte */
+if (inbuf && inlen > 0) {
+ESP_LOGI(TAG, "Received data: %.*s", inlen, (char *)inbuf);
 
-    return ESP_OK;
+cJSON *json = cJSON_ParseWithLength((const char *)inbuf, inlen);
+if (json == NULL) {
+ESP_LOGE(TAG, "Failed to parse JSON");
+} else {
+const cJSON *ip = cJSON_GetObjectItem(json, "ip");
+const cJSON *port = cJSON_GetObjectItem(json, "p");
+const cJSON *user = cJSON_GetObjectItem(json, "u");
+const cJSON *password = cJSON_GetObjectItem(json, "pw");
+
+if (cJSON_IsString(ip) && cJSON_IsNumber(port) && 
+cJSON_IsString(user) && cJSON_IsString(password)) {
+ESP_LOGI(TAG, "Parsed JSON:");
+ESP_LOGI(TAG, "  IP      : %s", ip->valuestring);
+ESP_LOGI(TAG, "  Port    : %d", port->valueint);
+ESP_LOGI(TAG, "  User    : %s", user->valuestring);
+ESP_LOGI(TAG, "  Password: %s", password->valuestring);
+} else {
+ESP_LOGE(TAG, "Invalid JSON structure");
 }
+
+cJSON_Delete(json);
+}
+}
+
+const char *response = "SUCCESS";
+*outbuf = (uint8_t *)strdup(response);
+if (*outbuf == NULL) {
+ESP_LOGE(TAG, "System out of memory");
+return ESP_ERR_NO_MEM;
+}
+*outlen = strlen(response) + 1;
+
+return ESP_OK;
+}
+
 
 /* Event handler for catching system events */
 static void event_handler(void *arg, esp_event_base_t event_base,
