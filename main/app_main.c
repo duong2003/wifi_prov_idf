@@ -23,7 +23,6 @@
 #include <wifi_provisioning/scheme_ble.h>
 #include <cJSON.h>
 
-
 static const char *TAG = "app";
 
 /* Signal Wi-Fi events on this event-group */
@@ -37,134 +36,107 @@ static EventGroupHandle_t wifi_event_group;
 esp_err_t get_mac_endpoint_handler(uint32_t session_id, const uint8_t *inbuf, ssize_t inlen,
                                    uint8_t **outbuf, ssize_t *outlen, void *priv_data)
 {
-    // Kiểm tra nếu có dữ liệu đầu vào
     if (inbuf && inlen > 0)
     {
-        // In ra nội dung nhận được từ endpoint ble_transmit chi tiết
-        ESP_LOGI(TAG, "ble_transmit endpoint received %d bytes:", inlen);
+        ESP_LOGI(TAG, "Received data on ble_transmit: %.*s", inlen, (char *)inbuf);
 
-        // In ra từng byte dưới dạng hex để kiểm tra chính xác nội dung
-        for (int i = 0; i < inlen; i++)
+        cJSON *json = cJSON_ParseWithLength((const char *)inbuf, inlen);
+        if (json == NULL)
         {
-            ESP_LOGI(TAG, "  byte[%d] = 0x%02x ('%c')", i, inbuf[i],
-                     (inbuf[i] >= 32 && inbuf[i] <= 126) ? inbuf[i] : '.');
-        }
-
-        // Kiểm tra mọi trường hợp cho "0"
-        bool is_zero = false;
-        if (inlen == 1 && inbuf[0] == '0')
-        { // ASCII '0'
-            is_zero = true;
-        }
-        else if (inlen == 1 && inbuf[0] == 0)
-        { // Binary 0
-            is_zero = true;
-        }
-        else if (inlen == 2 && inbuf[0] == '0' && inbuf[1] == 0)
-        { // ASCII '0' + null
-            is_zero = true;
-        }
-        else if (inlen == 3 && inbuf[0] == '{' && inbuf[1] == '0' && inbuf[2] == '}')
-        { // JSON format {0}
-            is_zero = true;
-        }
-
-        if (is_zero)
-        {
-            // Tạo chuỗi với tất cả các ký tự "F"
-            const char *response = "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
-
-            // Log ra phản hồi
-            ESP_LOGI(TAG, "Sending response for '0': %s", response);
-
-            // Cấp phát bộ nhớ cho dữ liệu đầu ra (sẽ được giải phóng bởi protocomm)
-            *outbuf = (uint8_t *)strdup(response);
-            if (*outbuf == NULL)
-            {
-                ESP_LOGE(TAG, "System out of memory");
-                return ESP_ERR_NO_MEM;
-            }
-
-            // Đặt độ dài đầu ra (bao gồm ký tự null kết thúc)
-            *outlen = strlen(response) + 1;
-
-            return ESP_OK;
+            ESP_LOGE(TAG, "Failed to parse JSON");
         }
         else
         {
-            // Tạo chuỗi với tất cả các ký tự "0"
-            const char *response = "0x0000000000000000000000000000000000";
+            const cJSON *ip = cJSON_GetObjectItem(json, "ip");
+            const cJSON *port = cJSON_GetObjectItem(json, "p");
+            const cJSON *user = cJSON_GetObjectItem(json, "u");
+            const cJSON *password = cJSON_GetObjectItem(json, "pw");
 
-            // Log ra phản hồi
-            ESP_LOGI(TAG, "Sending response for non-'0' input: %s", response);
-
-            *outbuf = (uint8_t *)strdup(response);
-            if (*outbuf == NULL)
+            if (cJSON_IsString(ip) && cJSON_IsNumber(port) &&
+                cJSON_IsString(user) && cJSON_IsString(password))
             {
-                ESP_LOGE(TAG, "System out of memory");
-                return ESP_ERR_NO_MEM;
+                ESP_LOGI(TAG, "Parsed JSON:");
+                ESP_LOGI(TAG, "  IP      : %s", ip->valuestring);
+                ESP_LOGI(TAG, "  Port    : %d", port->valueint);
+                ESP_LOGI(TAG, "  User    : %s", user->valuestring);
+                ESP_LOGI(TAG, "  Password: %s", password->valuestring);
+            }
+            else
+            {
+                ESP_LOGE(TAG, "Invalid JSON structure");
             }
 
-            *outlen = strlen(response) + 1;
-            return ESP_OK;
+            cJSON_Delete(json);
         }
     }
 
-    // Nếu không có dữ liệu đầu vào, gửi lại thông báo hướng dẫn
-    const char *help_msg = "Send '0' to get 0xFFF... or any other value to get 0x000...";
-    *outbuf = (uint8_t *)strdup(help_msg);
+    // Lấy MAC address Wi-Fi STA
+    uint8_t mac[6];
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    char mac_str[18];
+    snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    *outbuf = (uint8_t *)strdup(mac_str);
     if (*outbuf == NULL)
     {
         ESP_LOGE(TAG, "System out of memory");
         return ESP_ERR_NO_MEM;
     }
+    *outlen = strlen(mac_str) + 1;
 
-    *outlen = strlen(help_msg) + 1;
     return ESP_OK;
 }
 
-/* Handler cho custom endpoint "custom-data" */
-esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf, ssize_t inlen,
-    uint8_t **outbuf, ssize_t *outlen, void *priv_data)
-{
-if (inbuf && inlen > 0) {
-ESP_LOGI(TAG, "Received data: %.*s", inlen, (char *)inbuf);
+// /* Handler cho custom endpoint "custom-data" */
+// esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf, ssize_t inlen,
+//                                    uint8_t **outbuf, ssize_t *outlen, void *priv_data)
+// {
+//     if (inbuf && inlen > 0)
+//     {
+//         ESP_LOGI(TAG, "Received data: %.*s", inlen, (char *)inbuf);
 
-cJSON *json = cJSON_ParseWithLength((const char *)inbuf, inlen);
-if (json == NULL) {
-ESP_LOGE(TAG, "Failed to parse JSON");
-} else {
-const cJSON *ip = cJSON_GetObjectItem(json, "ip");
-const cJSON *port = cJSON_GetObjectItem(json, "p");
-const cJSON *user = cJSON_GetObjectItem(json, "u");
-const cJSON *password = cJSON_GetObjectItem(json, "pw");
+//         cJSON *json = cJSON_ParseWithLength((const char *)inbuf, inlen);
+//         if (json == NULL)
+//         {
+//             ESP_LOGE(TAG, "Failed to parse JSON");
+//         }
+//         else
+//         {
+//             const cJSON *ip = cJSON_GetObjectItem(json, "ip");
+//             const cJSON *port = cJSON_GetObjectItem(json, "p");
+//             const cJSON *user = cJSON_GetObjectItem(json, "u");
+//             const cJSON *password = cJSON_GetObjectItem(json, "pw");
 
-if (cJSON_IsString(ip) && cJSON_IsNumber(port) && 
-cJSON_IsString(user) && cJSON_IsString(password)) {
-ESP_LOGI(TAG, "Parsed JSON:");
-ESP_LOGI(TAG, "  IP      : %s", ip->valuestring);
-ESP_LOGI(TAG, "  Port    : %d", port->valueint);
-ESP_LOGI(TAG, "  User    : %s", user->valuestring);
-ESP_LOGI(TAG, "  Password: %s", password->valuestring);
-} else {
-ESP_LOGE(TAG, "Invalid JSON structure");
-}
+//             if (cJSON_IsString(ip) && cJSON_IsNumber(port) &&
+//                 cJSON_IsString(user) && cJSON_IsString(password))
+//             {
+//                 ESP_LOGI(TAG, "Parsed JSON:");
+//                 ESP_LOGI(TAG, "  IP      : %s", ip->valuestring);
+//                 ESP_LOGI(TAG, "  Port    : %d", port->valueint);
+//                 ESP_LOGI(TAG, "  User    : %s", user->valuestring);
+//                 ESP_LOGI(TAG, "  Password: %s", password->valuestring);
+//             }
+//             else
+//             {
+//                 ESP_LOGE(TAG, "Invalid JSON structure");
+//             }
 
-cJSON_Delete(json);
-}
-}
+//             cJSON_Delete(json);
+//         }
+//     }
 
-const char *response = "SUCCESS";
-*outbuf = (uint8_t *)strdup(response);
-if (*outbuf == NULL) {
-ESP_LOGE(TAG, "System out of memory");
-return ESP_ERR_NO_MEM;
-}
-*outlen = strlen(response) + 1;
+//     const char *response = "SUCCESS";
+//     *outbuf = (uint8_t *)strdup(response);
+//     if (*outbuf == NULL)
+//     {
+//         ESP_LOGE(TAG, "System out of memory");
+//         return ESP_ERR_NO_MEM;
+//     }
+//     *outlen = strlen(response) + 1;
 
-return ESP_OK;
-}
-
+//     return ESP_OK;
+// }
 
 /* Event handler for catching system events */
 static void event_handler(void *arg, esp_event_base_t event_base,
@@ -410,7 +382,7 @@ void app_main(void)
         wifi_prov_mgr_endpoint_create("ble_transmit");
 
         /* Tạo custom endpoint "custom-data" */
-        wifi_prov_mgr_endpoint_create("custom-data");
+        //wifi_prov_mgr_endpoint_create("custom-data");
 
         /* Do not stop and de-init provisioning even after success,
          * so that we can restart it later. */
@@ -424,7 +396,7 @@ void app_main(void)
         wifi_prov_mgr_endpoint_register("ble_transmit", get_mac_endpoint_handler, NULL);
 
         /* Đăng ký handler cho custom endpoint "custom-data" */
-        wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler, NULL);
+        //wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler, NULL);
 
         /* Thông tin provisioning */
         ESP_LOGI(TAG, "Provisioning Started. Use ESP-IDF Provisioning app or other tools");
